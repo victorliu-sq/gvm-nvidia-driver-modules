@@ -1186,6 +1186,11 @@ typedef struct
 // outside UVM's managed pages (the OptiX wrapper's VMM blocks) into the
 // process's gpu cgroup counter rt_current. SET / ADD / SUB change it (SUB
 // stops at 0); every op, GET included, fills the OUT fields afterwards.
+// Step 5: rtReclaimRequest is the module's request to this process to release
+// that many bytes of its rt part (rt_reclaim_request: produced by a
+// memory.limit write, an ADD or the allocation path when managed + rt exceed
+// the limit; a SUB decrements it by the same amount). memorySwapCurrent is
+// memory.swap.current (managed bytes paged out to the host).
 //
 typedef enum
 {
@@ -1206,7 +1211,8 @@ typedef struct
     NvU64           memoryLimit;      // OUT: memory.limit (-1ULL = none)
     NvU64           memoryCurrent;    // OUT: managed bytes (memory_current)
     NvU64           rtCurrent;        // OUT: rt_current after the op
-    NvU64           rtReclaimRequest; // OUT: bytes GVM asks this process to release (step 5; 0 until then)
+    NvU64           rtReclaimRequest; // OUT: bytes GVM asks this process to release from its rt part (step 5)
+    NvU64           memorySwapCurrent; // OUT: memory.swap.current (managed bytes paged out)
     NV_STATUS       rmStatus;         // OUT
 } UVM_RT_ACCOUNT_PARAMS;
 

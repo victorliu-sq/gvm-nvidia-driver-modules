@@ -154,6 +154,15 @@ struct uvm_gpu_cgroup_struct
     // allocation-path eviction, which only knows managed pages.
     atomic64_t rt_current;
 
+    // RTVM (doc/rtvm-plan.md step 5): bytes GVM asks this process to release
+    // from its rt part. Set to memory_current + rt_current - memory_limit
+    // when that is positive after a memory.limit write (the managed part
+    // having been evicted down to the limit first), on an rt ADD, and on the
+    // allocation path when the managed part alone fits the limit (nothing of
+    // it to evict); decremented by every rt SUB (not below 0); cleared when
+    // the sum fits again. User space polls it through UVM_RT_ACCOUNT GET.
+    atomic64_t rt_reclaim_request;
+
     size_t compute_priority;
     size_t compute_freeze;
 

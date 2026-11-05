@@ -96,6 +96,9 @@ static ssize_t gvm_process_memory_limit_write(struct file *file, const char __us
         uvm_debugfs_api_charge_gpu_memory_limit(va_spaces[va_space_index], gpu_debugfs->gpu_id,
                 atomic64_read(&(va_spaces[va_space_index]->gpu_cgroup[uvm_id_gpu_index(gpu_debugfs->gpu_id)].memory_current)), limit);
         va_spaces[va_space_index]->gpu_cgroup[uvm_id_gpu_index(gpu_debugfs->gpu_id)].memory_limit = limit;
+        // RTVM step 5: the managed part is at or under the limit now; what
+        // the rt part still adds beyond it is requested from user space.
+        gvm_rt_update_reclaim_request(va_spaces[va_space_index], gpu_debugfs->gpu_id);
     }
 
     _gvm_release_va_spaces(va_spaces, va_space_count);
@@ -138,6 +141,25 @@ static int gvm_process_memory_rt_current_show(struct seq_file *m, void *data)
         return -ENOENT;
 
     seq_printf(m, "%llu\n", (unsigned long long)atomic64_read(&(gpu_cgroup[uvm_id_gpu_index(gpu_debugfs->gpu_id)].rt_current)));
+
+    return 0;
+}
+
+// RTVM step 5: show the bytes GVM asks this process to release from its rt part
+static int gvm_process_memory_rt_reclaim_request_show(struct seq_file *m, void *data)
+{
+    struct gvm_gpu_debugfs *gpu_debugfs;
+    uvm_gpu_cgroup_t *gpu_cgroup;
+
+    gpu_debugfs = m->private;
+    if (!gpu_debugfs)
+        return -ENOENT;
+
+    gpu_cgroup = _gvm_find_gpu_cgroup_by_pid(gpu_debugfs->pid);
+    if (!gpu_cgroup)
+        return -ENOENT;
+
+    seq_printf(m, "%llu\n", (unsigned long long)atomic64_read(&(gpu_cgroup[uvm_id_gpu_index(gpu_debugfs->gpu_id)].rt_reclaim_request)));
 
     return 0;
 }
@@ -374,6 +396,18 @@ static const struct file_operations gvm_process_memory_rt_current_fops = {
     .release = single_release,
 };
 
+static int gvm_process_memory_rt_reclaim_request_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, gvm_process_memory_rt_reclaim_request_show, inode->i_private);
+}
+
+static const struct file_operations gvm_process_memory_rt_reclaim_request_fops = {
+    .open = gvm_process_memory_rt_reclaim_request_open,
+    .read = seq_read,
+    .llseek = seq_lseek,
+    .release = single_release,
+};
+
 static int gvm_process_compute_priority_open(struct inode *inode, struct file *file)
 {
     return single_open(file, gvm_process_compute_priority_show, inode->i_private);
@@ -570,6 +604,7 @@ int gvm_debugfs_create_gpu_dir(pid_t pid, uvm_gpu_id_t gpu_id)
         atomic64_set(&(va_space->gpu_cgroup[uvm_id_gpu_index(gpu_id)].memory_current), 0);
         atomic64_set(&(va_space->gpu_cgroup[uvm_id_gpu_index(gpu_id)].memory_swap_current), 0);
         atomic64_set(&(va_space->gpu_cgroup[uvm_id_gpu_index(gpu_id)].rt_current), 0);
+        atomic64_set(&(va_space->gpu_cgroup[uvm_id_gpu_index(gpu_id)].rt_reclaim_request), 0);
 
         va_space->gpu_cgroup[uvm_id_gpu_index(gpu_id)].compute_priority = GVM_MIN_PRIORITY / 2;
         va_space->gpu_cgroup[uvm_id_gpu_index(gpu_id)].compute_freeze = 0;
@@ -615,6 +650,14 @@ int gvm_debugfs_create_gpu_dir(pid_t pid, uvm_gpu_id_t gpu_id)
         debugfs_create_file("memory.rt.current", 0444, gpu_debugfs->gpu_dir, gpu_debugfs,
                             &gvm_process_memory_rt_current_fops);
     if (!gpu_debugfs->memory_rt_current) {
+        ret = -ENOMEM;
+        goto cleanup;
+    }
+
+    gpu_debugfs->memory_rt_reclaim_request =
+        debugfs_create_file("memory.rt.reclaim_request", 0444, gpu_debugfs->gpu_dir, gpu_debugfs,
+                            &gvm_process_memory_rt_reclaim_request_fops);
+    if (!gpu_debugfs->memory_rt_reclaim_request) {
         ret = -ENOMEM;
         goto cleanup;
     }
@@ -847,8 +890,29 @@ size_t get_gpu_memcg_rt_current(uvm_va_space_t *va_space, uvm_gpu_id_t gpu_id) {
     return atomic64_read(&(va_space->gpu_cgroup[uvm_id_gpu_index(gpu_id)].rt_current));
 }
 
+// RTVM step 5: rt_reclaim_request = memory_current + rt_current - memory_limit
+// when positive, else 0 (no limit: 0). The managed part is not evicted here;
+// the caller is the limit write (which evicted it down to the limit already),
+// an rt ADD, or the allocation path when the managed part alone fits.
+void gvm_rt_update_reclaim_request(uvm_va_space_t *va_space, uvm_gpu_id_t gpu_id) {
+    uvm_gpu_cgroup_t *cg;
+    unsigned long long limit, sum;
+
+    UVM_ASSERT(va_space->gpu_cgroup);
+    cg = &va_space->gpu_cgroup[uvm_id_gpu_index(gpu_id)];
+    limit = cg->memory_limit;
+    if (limit == (unsigned long long)-1ULL) {
+        atomic64_set(&cg->rt_reclaim_request, 0);
+        return;
+    }
+    sum = (unsigned long long)atomic64_read(&cg->memory_current) + (unsigned long long)atomic64_read(&cg->rt_current);
+    atomic64_set(&cg->rt_reclaim_request, (sum > limit) ? (long long)(sum - limit) : 0);
+}
+
 // RTVM (doc/rtvm-plan.md step 1): UVM_RT_ACCOUNT. SUB stops at 0 like
 // try_uncharge_gpu_memcg_debugfs; the OUT fields are filled after the op.
+// Step 5: ADD recomputes rt_reclaim_request (the sum may exceed the limit
+// now), SUB takes the same bytes off it (not below 0), GET reports it.
 NV_STATUS gvm_rt_account(UVM_RT_ACCOUNT_PARAMS *params, uvm_va_space_t *va_space, uvm_gpu_id_t gpu_id) {
     uvm_gpu_cgroup_t *cg;
     long long int old_value, new_value;
@@ -859,15 +923,21 @@ NV_STATUS gvm_rt_account(UVM_RT_ACCOUNT_PARAMS *params, uvm_va_space_t *va_space
     switch (params->op) {
         case UVM_RT_ACCOUNT_SET:
             atomic64_set(&cg->rt_current, params->value);
+            gvm_rt_update_reclaim_request(va_space, gpu_id);
             break;
         case UVM_RT_ACCOUNT_ADD:
             atomic64_add(params->value, &cg->rt_current);
+            gvm_rt_update_reclaim_request(va_space, gpu_id);
             break;
         case UVM_RT_ACCOUNT_SUB:
             do {
                 old_value = atomic64_read(&cg->rt_current);
                 new_value = (old_value > (long long int)params->value) ? old_value - (long long int)params->value : 0;
             } while (!atomic64_try_cmpxchg(&cg->rt_current, &old_value, new_value));
+            do {
+                old_value = atomic64_read(&cg->rt_reclaim_request);
+                new_value = (old_value > (long long int)params->value) ? old_value - (long long int)params->value : 0;
+            } while (!atomic64_try_cmpxchg(&cg->rt_reclaim_request, &old_value, new_value));
             break;
         case UVM_RT_ACCOUNT_GET:
             break;
@@ -878,7 +948,8 @@ NV_STATUS gvm_rt_account(UVM_RT_ACCOUNT_PARAMS *params, uvm_va_space_t *va_space
     params->memoryLimit = cg->memory_limit;
     params->memoryCurrent = atomic64_read(&cg->memory_current);
     params->rtCurrent = atomic64_read(&cg->rt_current);
-    params->rtReclaimRequest = 0;   // step 5 fills this from rt_reclaim_request
+    params->rtReclaimRequest = atomic64_read(&cg->rt_reclaim_request);
+    params->memorySwapCurrent = atomic64_read(&cg->memory_swap_current);
     return NV_OK;
 }
 

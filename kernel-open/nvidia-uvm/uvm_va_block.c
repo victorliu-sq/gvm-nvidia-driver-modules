@@ -2222,6 +2222,13 @@ static NV_STATUS block_alloc_gpu_chunk(uvm_va_block_t *block,
             status = NV_ERR_NO_MEMORY;
         }
         else {
+            // RTVM (doc/rtvm-plan.md step 5): the managed part fits the limit
+            // but managed + rt may not; nothing managed is there to evict for
+            // it, so the difference is requested from user space (the OptiX
+            // wrapper, which evicts idle structures) and the allocation goes
+            // ahead rather than failing.
+            if (va_space && get_gpu_memcg_rt_current(va_space, gpu->id) > 0)
+                gvm_rt_update_reclaim_request(va_space, gpu->id);
             // Try allocating a new one without eviction
             status = uvm_pmm_gpu_alloc_user_impl(&gpu->pmm, 1, size, UVM_PMM_ALLOC_FLAGS_NONE, (task) ? task->pid : 0, &gpu_chunk, &retry->tracker);
         }
