@@ -23,6 +23,7 @@ struct gvm_gpu_debugfs {
     struct dentry *memory_limit;      // memory.limit file
     struct dentry *memory_current;   // memory.current file (read-only)
     struct dentry *memory_swap_current;   // memory.swap.current file (read-only)
+    struct dentry *memory_rt_current;     // memory.rt.current file (read-only; RTVM)
     struct dentry *compute_priority;     // compute.priority file
     struct dentry *compute_freeze;       // compute.freeze file
     struct dentry *gcgroup_stat;  // gcgroup.stat file (read-only)
@@ -54,6 +55,9 @@ int try_uncharge_gpu_memcg_debugfs(uvm_va_space_t *va_space, uvm_gpu_id_t gpu_id
 
 size_t get_gpu_memcg_current(uvm_va_space_t *va_space, uvm_gpu_id_t gpu_id);
 size_t get_gpu_memcg_limit(uvm_va_space_t *va_space, uvm_gpu_id_t gpu_id);
+// RTVM: bytes user space reported through UVM_RT_ACCOUNT (not managed pages).
+size_t get_gpu_memcg_rt_current(uvm_va_space_t *va_space, uvm_gpu_id_t gpu_id);
 
 NV_STATUS gvm_update_event_count(UVM_UPDATE_EVENT_COUNT_PARAMS *params, uvm_va_space_t *va_space, uvm_gpu_id_t gpu_id);
+NV_STATUS gvm_rt_account(UVM_RT_ACCOUNT_PARAMS *params, uvm_va_space_t *va_space, uvm_gpu_id_t gpu_id);
 #endif  // _GVM_DEBUGFS_H

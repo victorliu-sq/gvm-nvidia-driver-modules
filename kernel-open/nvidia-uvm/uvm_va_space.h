@@ -147,6 +147,13 @@ struct uvm_gpu_cgroup_struct
     atomic64_t memory_current;
     atomic64_t memory_swap_current;
 
+    // RTVM (doc/rtvm-plan.md step 1): bytes of GPU memory this process holds
+    // outside UVM's managed pages, reported by user space through
+    // UVM_RT_ACCOUNT (the OptiX wrapper's VMM blocks holding acceleration
+    // structures). Shown as part of memory.current; not subject to the
+    // allocation-path eviction, which only knows managed pages.
+    atomic64_t rt_current;
+
     size_t compute_priority;
     size_t compute_freeze;
 

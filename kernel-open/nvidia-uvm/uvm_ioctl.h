@@ -1182,6 +1182,35 @@ typedef struct
 } UVM_UPDATE_EVENT_COUNT_PARAMS;
 
 //
+// RTVM (doc/rtvm-plan.md step 1): user space reports GPU memory it holds
+// outside UVM's managed pages (the OptiX wrapper's VMM blocks) into the
+// process's gpu cgroup counter rt_current. SET / ADD / SUB change it (SUB
+// stops at 0); every op, GET included, fills the OUT fields afterwards.
+//
+typedef enum
+{
+    UVM_RT_ACCOUNT_SET = 0,
+    UVM_RT_ACCOUNT_ADD,
+    UVM_RT_ACCOUNT_SUB,
+    UVM_RT_ACCOUNT_GET,
+
+    UVM_RT_ACCOUNT_OP_COUNT
+} UVM_RT_ACCOUNT_OP;
+
+#define UVM_RT_ACCOUNT                                                UVM_IOCTL_BASE(82)
+typedef struct
+{
+    NvProcessorUuid uuid;             // IN
+    NvU32           op;               // IN: UVM_RT_ACCOUNT_OP
+    NvU64           value;            // IN: bytes for SET / ADD / SUB
+    NvU64           memoryLimit;      // OUT: memory.limit (-1ULL = none)
+    NvU64           memoryCurrent;    // OUT: managed bytes (memory_current)
+    NvU64           rtCurrent;        // OUT: rt_current after the op
+    NvU64           rtReclaimRequest; // OUT: bytes GVM asks this process to release (step 5; 0 until then)
+    NV_STATUS       rmStatus;         // OUT
+} UVM_RT_ACCOUNT_PARAMS;
+
+//
 // Temporary ioctls which should be removed before UVM 8 release
 // Number backwards from 2047 - highest custom ioctl function number
 // windows can handle.

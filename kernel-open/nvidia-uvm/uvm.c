@@ -1055,6 +1055,22 @@ static NV_STATUS uvm_api_update_event_count(UVM_UPDATE_EVENT_COUNT_PARAMS *param
     return gvm_update_event_count(params, va_space, gpu->id);
 }
 
+// RTVM (doc/rtvm-plan.md step 1): same lookup as uvm_api_update_event_count.
+static NV_STATUS uvm_api_rt_account(UVM_RT_ACCOUNT_PARAMS *params, struct file *filp)
+{
+    uvm_va_space_t *va_space = uvm_va_space_get(filp);
+    uvm_gpu_t *gpu;
+
+    if (!va_space)
+        return NV_ERR_INVALID_ARGUMENT;
+
+    gpu = uvm_va_space_get_gpu_by_uuid(va_space, &params->uuid);
+    if (!gpu)
+        return NV_ERR_INVALID_ARGUMENT;
+
+    return gvm_rt_account(params, va_space, gpu->id);
+}
+
 static NV_STATUS uvm_debugfs_api_ctrl_cmd_operate_gr_channel_group(UVM_CTRL_CMD_OPERATE_CHANNEL_GROUP_PARAMS *params, uvm_va_space_t *va_space, uvm_gpu_id_t gpu_id) {
     uvm_gpu_va_space_t *gpu_va_space;
     uvm_user_channel_group_t *user_channel_group;
@@ -1219,6 +1235,7 @@ static long uvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_CLEAR_ALL_ACCESS_COUNTERS,      uvm_api_clear_all_access_counters);
         UVM_ROUTE_CMD_STACK_NO_INIT_CHECK(UVM_IS_INITIALIZED,              uvm_api_is_initialized);
         UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_UPDATE_EVENT_COUNT,              uvm_api_update_event_count);
+        UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_RT_ACCOUNT,                      uvm_api_rt_account);
     }
 
     // Try the test ioctls if none of the above matched
